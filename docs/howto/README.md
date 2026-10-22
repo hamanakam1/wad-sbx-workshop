@@ -20,8 +20,10 @@ trustworthy across that gap. Neither is a blog post.
 
 **If a guide and the ledger disagree, the ledger is right.** Where a guide
 states something the ledger does not contain, it is marked *not verified in
-the ledger* — usually an observation from the local binary's help text, and
-always worth confirming.
+the ledger*. Most such statements come from two other places: the
+`--help` output and log strings of the `sbx` binary installed on this Mac,
+and `FIELD-GUIDE.md` in the repository root. Where a guide cites
+`FIELD-GUIDE.md`, it says so at the point of use.
 
 ## Reading order
 
@@ -84,6 +86,7 @@ Keep **[08-troubleshooting.md](08-troubleshooting.md)** open in a second tab.
 
 | Path | What it is |
 | --- | --- |
+| `FIELD-GUIDE.md` | A generated, single-file field guide for the same subject, with `[verified]` / `[inferred]` / `[corrected]` confidence markers. It is a sibling reference, not the ledger; where the two differ, the ledger wins. |
 | `connectors/sbx-runner/` | The version-compatible sandbox test runner. It reads the installed `sbx` version once, picks the spelling that version understands, normalises the shapes it gets back, and writes a receipt. |
 | `connectors/sbx-mcp/` | The MCP stdio server that exposes Docker Sandboxes to an agent, with a read/write separation enforced by `SBX_MCP_ALLOW` and `SBX_MCP_ALLOWED_COMMANDS`. |
 | `connectors/kits/dashboard-tests/` | A v2 kit that provisions a Python test toolchain and writes a runner that produces a tree digest and JUnit XML. |

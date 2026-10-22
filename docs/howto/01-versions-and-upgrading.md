@@ -228,10 +228,14 @@ guess at parse time.**
 #!/bin/sh
 # Resolve the sbx flags this host understands, once.
 sbx_json_flag() {
-  version=$(sbx version --json 2>/dev/null | sed -n 's/.*"client".*"version": *"v\{0,1\}\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\).*/\1 \2 \3/p' | head -1)
-  set -- $version
-  major=${1:-0}; minor=${2:-0}; patch=${3:-0}
-  if [ "$major" -gt 0 ] || [ "$minor" -ge 48 ]; then
+  version=$(sbx version --json 2>/dev/null \
+    | tr ',' '\n' \
+    | grep -m1 '"version"' \
+    | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' \
+    | tr -d 'v')
+  major=$(printf '%s' "$version" | cut -d. -f1)
+  minor=$(printf '%s' "$version" | cut -d. -f2)
+  if [ "${major:-0}" -gt 0 ] || [ "${minor:-0}" -ge 48 ]; then
     printf '%s' "--format json"
   else
     printf '%s' "--json"
@@ -239,10 +243,18 @@ sbx_json_flag() {
 }
 ```
 
-Note the parse: `v0.45.0-rc2` must be read as `0.45.0`, not as a prerelease
+On the v0.45.0-rc2 binary installed on this Mac that prints `--json`; on
+v0.48.0 or later it prints `--format json`.
+
+The parse deliberately treats `v0.45.0-rc2` as `0.45.0`, not as a prerelease
 that sorts below `0.45.0`. The `sbx-runner` connector does the same thing
-with a regular expression rather than `sed`, and treats an unparseable version
-as "assume the old spelling" — the conservative direction.
+with a regular expression rather than `sed`, and treats an unparseable
+version as "assume the old spelling" — the conservative direction.
+
+Note that `--json` is the spelling every version understands, because from
+v0.48.0 it is an alias for `--format json`. `--format` does not exist on
+v0.45.0-rc2: `sbx prune --dry-run --format json` there fails with
+`error: unknown flag: --format`.
 
 Then:
 

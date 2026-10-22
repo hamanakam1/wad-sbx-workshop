@@ -193,9 +193,18 @@ warning.
 
 ### Why it matters: raw text splicing
 
-An argument value is **spliced as raw text** into the install command and into
-the file content. In `dashboard-tests`, `"${{ kit.args.python_version }}"`
-appears inside a shell command:
+An argument value is **spliced as raw text** into the kit's YAML **before the
+YAML is parsed**. The value is not quoted, escaped or validated at splice
+time. Whatever characters the pattern permits arrive verbatim, in whatever
+position the reference put them.
+
+The ledger does not record this mechanism. `FIELD-GUIDE.md` in this
+repository states it, and marks it verified: "args are string inputs, spliced
+into the YAML as raw text *before* it is parsed. The `pattern` is what stops
+a value from breaking out of a shell string. Never pass secrets as args."
+
+In `dashboard-tests`, `"${{ kit.args.python_version }}"` appears inside a
+shell command:
 
 ```yaml
 command: |
@@ -213,9 +222,8 @@ string that becomes a shell variable:
 SBX_TEST_COMMAND: "${{ kit.args.test_command }}"
 ```
 
-The value is not quoted, escaped or validated at splice time. Whatever
-characters the pattern permits arrive verbatim. The pattern is the only thing
-standing between an argument value and the shell.
+The pattern is the only thing standing between an argument value and the
+shell.
 
 ### What each pattern buys
 
@@ -272,17 +280,41 @@ test_command:
   pattern: '^[A-Za-z0-9 _./,:=-]+$'
 ```
 
+**Never pass a secret as an argument.** An argument value is visible in the
+kit's effective spec, in `sbx kit inspect --json`, and in anything that
+dumps the resolved kit. Use a secret from the secret store instead.
+
+### Validation is not enforcement
+
+`sbx kit validate` checks **structure only**. It does not run the install
+commands, it does not test that the allowed hosts are reachable, and it does
+not catch conflicts between kits.
+
+That includes the network patterns: a `**.example.com` rule **validates
+cleanly** even though the ledger records multi-label wildcards as
+"parsed, enforcement pending". A kit that passes `sbx kit validate` can
+still fail at run time.
+
+The ledger's v2 pattern table (ledger §6) is the enforcement table:
+
+| Pattern | Status |
+| --- | --- |
+| An exact host, `host:port`, `*.example.com` | **Enforced** |
+| `**.example.com`, port ranges, a port wildcard, CIDR | Parsed, **enforcement pending** |
+
 ## 4. The execution order of setup steps
 
-1. **`setup.install` steps run first, in the order they are listed.**
-2. **`setup.files` are written after the install steps.**
+1. **`setup.install` steps run first, in the order they are listed.** They run
+   through `sh -c`.
+2. **`setup.files` are written after the install steps**, as the agent user.
 3. **Install steps re-run on every sandbox creation.** They are not a
    one-time bake into a published image.
 
 (The ordering is confirmed by the runtime's own message text — "install step
 (which runs first) already wrote it" — and is the layout every kit in this
 repository uses. The ledger does not record an explicit ordering guarantee, so
-treat it as the documented layout rather than a promise.)
+treat it as the documented layout rather than a promise. `FIELD-GUIDE.md`
+records the same order and marks it verified.)
 
 The practical consequence: **an install step can rely on a file it writes, and
 a file can rely on a tool an install step installed.** The `dashboard-tests`
@@ -326,10 +358,30 @@ break an agent in ways that look like agent bugs.
 The other half of the rule: **do not chown the whole workspace.** The
 workspace is already the agent's. Only the paths your step created.
 
-Which account a step runs as is chosen with the `user:` key. Both kits in this
-repository state it explicitly rather than relying on a default:
-`user: root` in `dashboard-tests`, `user: agent` in `factory/hello-kit`. The
-ledger does not record what the unspecified default is.
+Which account a step runs as is chosen with the `user:` key.
+
+**Install steps run as root by default.** The ledger does not record this;
+`FIELD-GUIDE.md` in this repository does, and marks it verified: "`setup.install`
+runs through `sh -c`, **as root unless you say `user: agent`**, at creation
+and again on every recreate."
+
+So a step that means to run as the agent must say `user: agent` explicitly.
+`factory/hello-kit/spec.yaml` does; `connectors/kits/dashboard-tests/spec.yaml`
+says `user: root` because it installs system packages.
+
+**Files are written as the agent user, not as root.** `FIELD-GUIDE.md` records
+that `setup.files` are written at start as the agent user, and that only
+`${WORKDIR}` is substituted in their content. That is why the chown rule
+applies to install steps only: a file you declare is already owned by the
+agent.
+
+Two more facts from the same source, worth knowing:
+
+- `schemaVersion: "2"` selects a **strict grammar**: any unknown field is an
+  error. A typo like `netwrok:` fails validation instead of silently doing
+  nothing.
+- If two kits set the same `environment.variables` key, **the last kit
+  silently wins**.
 
 > The v3 kit schema has a `chown_to_run_user` field. It is **not verified in
 > the ledger** — it was observed in the v0.45.0-rc2 binary only — and it is
