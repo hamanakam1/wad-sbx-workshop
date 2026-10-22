@@ -125,7 +125,7 @@ Skipping ".DS_Store": not a directory
 
 ```bash
 sbx skills update
-sbx skills rm <name> [--force]
+sbx skills rm graphify --force
 ```
 
 `sbx skills update` refreshes **only** skills that were installed with

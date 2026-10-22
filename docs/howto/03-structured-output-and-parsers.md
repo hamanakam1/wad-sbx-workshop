@@ -109,11 +109,11 @@ prints the start message on stderr while the command's own output streams
 through unchanged:
 
 ```console
-$ sbx exec <sandbox> -- sh -c 'echo to-stdout; echo to-stderr >&2; exit 7'
+$ sbx exec ci-task -- sh -c 'echo to-stdout; echo to-stderr >&2; exit 7'
 exit=7
 ```
 
-stdout got `to-stdout`; stderr got `Sandbox <sandbox> started successfully` and
+stdout got `to-stdout`; stderr got `Sandbox ci-task started successfully` and
 `to-stderr`. If you had captured only stdout you would have lost the start
 message and the error text, and kept a truncated result.
 

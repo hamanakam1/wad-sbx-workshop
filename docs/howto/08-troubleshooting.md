@@ -116,14 +116,14 @@ If that is not enough, escalate to the state wipe in §7.
 ### A sandbox is "not responding"
 
 ```bash
-sbx diagnose --json          # running CLI and shim processes
-sbx stop <name>              # a stop is the reconcile path
-sbx run --name <name>        # restart a stopped sandbox
+sbx diagnose --json              # running CLI and shim processes
+sbx stop my-sandbox              # a stop is the reconcile path
+sbx run --name my-sandbox        # restart a stopped sandbox
 ```
 
 There is no `sbx start` in the v0.45.0-rc2 command list. To bring a stopped
-sandbox back, `sbx run --name <name>` — that is what the stop message itself
-tells you: "Restart with: sbx run --name <name>".
+sandbox back, `sbx run --name my-sandbox` — that is what the stop message
+itself tells you: "Restart with: sbx run --name my-sandbox".
 
 ### A hung command
 
@@ -131,11 +131,11 @@ tells you: "Restart with: sbx run --name <name>".
 
 ```bash
 # From the host, in another terminal.
-sbx stop <name>
+sbx stop my-sandbox
 ```
 
 `sbx stop` is the safe interruption: it stops the sandbox and leaves the
-state preserved. If you need a hard kill, `sbx rm --force <name>`.
+state preserved. If you need a hard kill, `sbx rm --force my-sandbox`.
 
 For a script, enforce the timeout yourself. `connectors/sbx-runner/sbx_runner.py`
 does it at the subprocess boundary (300 s create, 900 s exec, 120 s remove)
@@ -237,7 +237,7 @@ Two rules that follow:
 Check what the policy thinks before assuming it is a network problem:
 
 ```bash
-sbx policy check network <host>
+sbx policy check network api.github.com
 sbx policy log --json
 ```
 
@@ -256,7 +256,7 @@ ledger §10:
 
 ```bash
 sbx policy log --json
-sbx policy log <sandbox> --json
+sbx policy log my-sandbox --json
 sbx policy log --limit 20 --json
 ```
 
@@ -298,7 +298,7 @@ network (L4) layer, where the rules are whole-destination:
 
 ```bash
 sbx policy allow --help
-sbx policy check network <host>
+sbx policy check network api.github.com
 ```
 
 Known open bug (ledger §17): **UDP to a denied hostname can be permitted via
@@ -345,8 +345,8 @@ tar errors — on v0.45.0-rc2, create the destination directory yourself.
 > compromise (ledger §9):
 >
 > ```bash
-> sbx exec <sandbox-name> -- sudo apt-get update
-> sbx exec <sandbox-name> -- sudo apt-get install --only-upgrade -y ca-certificates
+> sbx exec my-sandbox -- sudo apt-get update
+> sbx exec my-sandbox -- sudo apt-get install --only-upgrade -y ca-certificates
 > ```
 
 ### Do not override `SSL_CERT_FILE`

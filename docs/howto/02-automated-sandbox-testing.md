@@ -80,9 +80,13 @@ This is the shape the ledger documents as the unattended form (ledger §8):
 
 ```bash
 sbx create --name ci-task --clone claude .
-sbx exec ci-task -- …              # your test command
+sbx exec ci-task -- pytest -q
 sbx rm --force ci-task
 ```
+
+The ledger writes the middle line as `sbx exec ci-task -- …`, with the command
+as the argument list after the `--` separator. `pytest -q` is a concrete
+example; yours will be whatever your suite is.
 
 Three things about it are worth stating explicitly.
 
@@ -140,12 +144,12 @@ That is the single most common way an unattended `sbx` pipeline goes wrong.
 against a stopped sandbox:
 
 ```console
-$ sbx exec <sandbox> -- sh -c 'echo to-stdout; echo to-stderr >&2; exit 7'
+$ sbx exec ci-task -- sh -c 'echo to-stdout; echo to-stderr >&2; exit 7'
 exit=7
 ```
 
-with `to-stdout` on stdout and both `Sandbox <name> started successfully` and
-`to-stderr` on stderr.
+With `to-stdout` on stdout and both `Sandbox ci-task started successfully` and
+`to-stderr` on stderr. Verified on this Mac against a stopped sandbox.
 
 So the rules are:
 
