@@ -1,0 +1,55 @@
+name: Field guide and connectors
+
+on:
+  push:
+    branches: [main, 'hamanaka/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guide:
+    name: Field guide generator
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: The generator turns the guide asset into Markdown
+        run: |
+          python3 scripts/tests/test_build_field_guide.py
+      - name: The generated guide is a readable document
+        run: |
+          test -s FIELD-GUIDE.md
+          grep -q "^# The Docker Sandbox field guide" FIELD-GUIDE.md
+          grep -q "^### Exercise 12" FIELD-GUIDE.md
+          ! grep -q "<span\|<div\|</p>" FIELD-GUIDE.md
+
+  connectors:
+    name: Connectors
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the connector suites
+        run: |
+          python3 connectors/sbx-runner/test_sbx_runner.py
+          python3 connectors/sbx-mcp/test_sbx_mcp.py
+
+  kit:
+    name: Kit validates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the kit's structure
+        run: |
+          if command -v sbx >/dev/null 2>&1; then
+            sbx kit validate connectors/kits/dashboard-tests --json
+          else
+            echo "sbx is not installed here; the kit is checked during review"
+          fi

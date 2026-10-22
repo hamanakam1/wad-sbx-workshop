@@ -7,3 +7,7 @@ sample-app/
 host-only.txt
 factory/
 projects/
+
+# Python bytecode from the connector scripts
+__pycache__/
+*.pyc

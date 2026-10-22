@@ -5,6 +5,27 @@ agents that takes a task, changes the code, reviews the result and asks for your
 help when it needs a product decision. You'll start with one agent in Docker
 Sandboxes and add the tools it needs to work as part of a team.
 
+## This fork
+
+This is a fork of [shelajev/wad-sbx-workshop](https://github.com/shelajev/wad-sbx-workshop),
+which is the original workshop and stays the source of the chapters. The fork
+adds a layer on top, for using Docker Sandboxes from a host that already runs
+agent lanes and a dashboard:
+
+| | |
+| --- | --- |
+| [`FIELD-GUIDE.md`](FIELD-GUIDE.md) | The field guide: what a sandbox is, what crosses its boundary, what changed in the CLI, and twelve exercises. Generated from the dashboard's own asset, so the two cannot drift. |
+| [`docs/howto/`](docs/howto/) | Eight how-to guides over a fact ledger that records where every claim came from. The ledger is the part that matters: the CLI moved twice in three months, and prose written from memory was already wrong when it was written. |
+| [`connectors/`](connectors/) | A runner that executes a command in a disposable sandbox and writes a receipt, an MCP server that exposes the sandbox state to an agent, and a kit for running a Python suite inside a sandbox. |
+
+Nothing in the chapters was changed. To pick up upstream work:
+
+```bash
+git remote -v
+git fetch upstream
+git merge upstream/main
+```
+
 ## What you will build
 
 Your factory connects a task backlog on your laptop to a team of coding agents

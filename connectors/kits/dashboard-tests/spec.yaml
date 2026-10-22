@@ -1,0 +1,117 @@
+schemaVersion: "2"
+kind: mixin
+name: dashboard-tests
+description: "Test tooling for running a Python test suite inside a Docker Sandbox, with a runner that writes a tree digest and JUnit XML next to the code it tested."
+displayName: "Dashboard test tooling"
+version: "1.0.0"
+args:
+  python_version:
+    default: "3.12"
+    description: "Python minor version to install from the distribution repositories."
+    pattern: '^[0-9]{1,2}\.[0-9]{1,2}$'
+  test_command:
+    default: "python3 -m pytest -q"
+    description: "The command the runner executes when it is given no arguments."
+    pattern: '^[A-Za-z0-9 _./,:=-]+$'
+permissions:
+  network:
+    allow:
+      - "pypi.org"
+      - "files.pythonhosted.org"
+environment:
+  variables:
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PIP_NO_INPUT: "1"
+    SBX_TEST_COMMAND: "${{ kit.args.test_command }}"
+setup:
+  install:
+    - user: root
+      description: "Install Python, pip and the CA bundle, then a virtualenv for the suite."
+      command: |
+        set -eu
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          ca-certificates \
+          "python${{ kit.args.python_version }}" \
+          "python${{ kit.args.python_version }}-venv" \
+          python3-pip
+        rm -rf /var/lib/apt/lists/*
+        # The suite runs from a virtualenv so the sandbox's system Python is
+        # never modified by a pip install. Idempotent: the guard is the
+        # sentinel path, and this step re-runs on every recreate.
+        if [ ! -x /home/agent/.venv/bin/python ]; then
+          rm -rf /home/agent/.venv
+          python3 -m venv /home/agent/.venv
+          # Only the directory this step created is chowned. Nothing else
+          # under /home/agent is touched.
+          chown -R agent:agent /home/agent/.venv
+        fi
+        /home/agent/.venv/bin/python -m pip install --upgrade pip
+  files:
+    - path: /home/agent/run-tests.sh
+      mode: "0755"
+      content: |
+        #!/bin/sh
+        # Run a suite inside the sandbox and leave evidence next to the code.
+        # Written by the dashboard-tests kit. Safe to re-run.
+        set -eu
+
+        WORKSPACE="${WORKDIR:-$PWD}"
+        RESULTS="$WORKSPACE/.sbx-test-results"
+        mkdir -p "$RESULTS"
+
+        echo "workspace   $WORKSPACE"
+        echo "started     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        # A digest of the tree under test, so a receipt can name exactly what
+        # was executed. Sorted relative paths, no .git, one line per file.
+        if command -v sha256sum >/dev/null 2>&1; then
+          find "$WORKSPACE" -path "$WORKSPACE/.git" -prune -o -type f -print 2>/dev/null \
+            | sed "s|^$WORKSPACE/||" | LC_ALL=C sort > "$RESULTS/files.txt" || true
+          : > "$RESULTS/tree.sha256"
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            sum=$(sha256sum "$WORKSPACE/$path" 2>/dev/null | cut -d" " -f1) || continue
+            [ -n "$sum" ] || continue
+            printf '%s  %s\n' "$sum" "$path" >> "$RESULTS/tree.sha256"
+          done < "$RESULTS/files.txt"
+          echo "digest      $(sha256sum "$RESULTS/tree.sha256" | cut -d" " -f1)"
+          echo "files       $(wc -l < "$RESULTS/tree.sha256" | tr -d " ")"
+        fi
+
+        # Install the declared dependencies when the project has them.
+        if [ -f "$WORKSPACE/requirements.txt" ]; then
+          echo "deps        installing from requirements.txt"
+          /home/agent/.venv/bin/python -m pip install -q -r "$WORKSPACE/requirements.txt" || \
+            echo "deps        pip install failed; continuing with what is installed"
+        fi
+
+        # The command: either the arguments this script was given, or the
+        # one the kit was configured with. Word splitting only — no globbing,
+        # and the shell never re-interprets metacharacters.
+        set -f
+        if [ "$#" -gt 0 ]; then
+          set -- "$@"
+        else
+          # shellcheck disable=SC2086
+          set -- $SBX_TEST_COMMAND
+        fi
+
+        echo "command     $*"
+        case "$*" in
+          *pytest*) set -- "$@" "--junitxml=$RESULTS/junit.xml" ;;
+          *) : ;;
+        esac
+
+        set +e
+        ( cd "$WORKSPACE" && "$@" )
+        status=$?
+        set -e
+
+        echo "finished    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "exit_code   $status"
+        echo "results     $RESULTS"
+        exit "$status"
