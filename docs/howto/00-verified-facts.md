@@ -71,11 +71,13 @@ Checked against: HELP.
 | `sbx mcp add` | `--skip_auth` | `--skip-auth` (old spelling still accepted, hidden, warns) |
 
 Also: `--format`, `--json` and `-q` are mutually exclusive on commands with
-shared output flags — even `--json --format json` is rejected. `sbx
-settings ls` is primary; `sbx settings list` stays an alias. `sbx kit
-builder history rm` keeps `--yes`/`-y` because its `--force` is forwarded to
-Buildx. The deprecated `--global` flag on secret commands is still accepted
-but hidden and warns on stderr.
+shared output flags — even `--json --format json` is rejected. **That
+exclusivity is a v0.48+ behaviour.** On v0.45.0-rc2 the `--format` flag does
+not exist at all, `--json` and `-o json` are aliases of each other, and
+passing both is accepted (§18). `sbx settings ls` is primary; `sbx settings
+list` stays an alias. `sbx kit builder history rm` keeps `--yes`/`-y` because
+its `--force` is forwarded to Buildx. The deprecated `--global` flag on secret
+commands is still accepted but hidden and warns on stderr.
 
 Checked against: RELEASE (v0.48.0), DOCS (automation page).
 
@@ -91,7 +93,7 @@ is the same representation.
 | `sbx mcp ls` (local) | `{"gateway": {...}, "servers": [...]}` | bare array; each row carries `gateway` |
 | `sbx policy log` | `allowed_hosts` / `blocked_hosts` | `{"updated_at", "allowed": [...], "blocked": [...]}`; entries carry `sandbox_id`, `host`, `proxy_type`, `rule`, `reason`, `count`, `first_seen`, `last_seen` |
 | `sbx --cloud policy ls` | camelCase | snake_case |
-| `sbx ports` | `port` (cloud) | cloud: `sandbox_port` + `url`; local: `host_ip`, `host_port`, `sandbox_port`, `protocol` |
+| `sbx ports` | `port` (cloud) | cloud: `sandbox_port` + `url`. The **local** row shape did not change: it was already `host_ip`, `host_port`, `sandbox_port`, `protocol` on v0.45 (§18). |
 | `sbx ports --publish/--unpublish` | human-readable lines | result rows with `action: published` / `action: unpublished` |
 | `sbx volume create\|ls\|inspect` (cloud) | `ID`, `Name`, `CreatedAt` | `id`, `name`, `created_at`; `inspect` defaults to a human view, so ask for `--format json` |
 | `sbx rm`, `sbx stop`, `sbx template rm`, `sbx volume rm` | one line per target | array of `{action, resource, name, id?, error?}`; actions are lowercase `removed`, `stopped`, `removing`, `stopping`, `failed` |
@@ -488,3 +490,86 @@ Checked against: RELEASE (v0.48.0, v0.49.1), DOCS (troubleshooting).
 | A kit signature does not cover the bytes its install command downloads | By design; pin those by digest |
 | An agent can spend an injected credential through any allowed host | By design |
 | `sbx policy log` does not evaluate HTTP method and path | By design |
+
+## 18. Observed on this Mac, v0.45.0-rc2
+
+Everything in this section was checked against the binary installed on this
+Mac, either by running it or by reading its help output. It is the
+pre-v0.48 surface, so a script that has to work on both versions needs
+both this section and §3 and §4.
+
+Source: **LIVE** — a command run on this Mac, or its `--help` text.
+
+### Commands and their behaviour
+
+| Fact | Note |
+| --- | --- |
+| `sbx exec` propagates the inner command's exit code | A command that exits 7 makes `sbx exec` exit 7. This is what makes the exit status usable as a script's verdict. |
+| `sbx exec` writes "Sandbox `<name>` started successfully" to **stderr** | Starting a stopped sandbox is a progress message, not a result. A script that reads only stdout sees nothing. |
+| `sbx exec` starts a stopped sandbox first | |
+| There is no `sbx start` | The restart path is `sbx run --name <name>`, which is what the stop message itself says. |
+| `sbx ports` on a stopped sandbox **starts it** | |
+| `sbx ports` without a protocol defaults to `tcp4` | Unpublishing without a protocol removes the tcp4 default or a dual-stack tcp; anything left behind is reported. |
+| Publishing persists across a restart | An explicit host port is reused; an OS-assigned host port can change. |
+| `sbx setup ssh --auto-create` does not exist in this binary | It is a v0.48.0 addition. `sbx setup ssh --alias` and `sbx setup ssh remove` do exist here. |
+| `sbx policy allow network` / `sbx policy check network` take `--protocol` and `--sandbox` | A bare host is evaluated with port 443. |
+| `sbx reset` stops running sandboxes with a 30 s timeout, clears the image cache, the internal registries, the policies, the managed SSH configuration, the assistant's sessions and history, and the stored secrets | `--preserve-secrets` keeps the secrets; `--force` skips the prompt. |
+
+### Document shapes on this build
+
+| Command | Shape on v0.45.0-rc2 |
+| --- | --- |
+| `sbx ls --json` | `{"sandboxes": [...]}` |
+| `sbx mcp ls --json` | `{"gateway": {...}, "servers": [...]}` |
+| `sbx policy log --json` | `{"blocked_hosts": [], "allowed_hosts": [...]}` |
+| `sbx ports --json` (local) | a bare array of `{"host_ip", "host_port", "sandbox_port", "protocol"}` — **the same shape as v0.48**; only the cloud rows changed |
+| `sbx prune --dry-run --json` | `{"would_remove": [{"name", "agent", "stopped_at", "workspaces", "workspace_missing"}]}` |
+
+`--format` is an **unknown flag** on this build: `sbx prune --dry-run
+--format json` fails with "unknown flag: --format". Use `--json` here.
+
+`--json` and `-o json` are aliases on this build and passing both is
+accepted. The mutual exclusivity in §3 is a v0.48+ rule.
+
+### Environment variables
+
+| Variable | Default | Note |
+| --- | --- | --- |
+| `DOCKER_SANDBOXES_ROOT_SIZE` | 20 GB | The root filesystem. |
+| `DOCKER_SANDBOXES_DOCKER_SIZE` | 10 GB | The Docker data disk, minimum 512 MiB. |
+| `DOCKER_SANDBOXES_CLONED_WORKSPACE_SIZE` | — | The clone-mode workspace. |
+| `DOCKER_SANDBOXES_ENABLE_VIRTIOFS_CACHE` | on | Set to 0 to turn the virtio-fs cache off in a large direct-mode checkout. |
+
+None of them can resize an existing sandbox: they are read at creation.
+
+### State paths on macOS
+
+| Path | Holds |
+| --- | --- |
+| `~/.sbx/run/d/sandboxd.sock` | the daemon socket |
+| `~/Library/Application Support/com.docker.sandboxes/` | `sandboxes/sandboxd` (daemon state and logs), `ssh`, `env`, `locks`, `settings.json.lock` |
+| `~/Library/Application Support/com.docker.sandboxes/sandboxes/agent-skills` | the shared skills store |
+
+The Linux and Windows equivalents are **not recorded here**: they were not
+observed on this Mac and are not stated in the documentation this ledger
+was checked against. Treat them as unknown rather than guessed.
+
+### Kit rules
+
+| Fact | Note |
+| --- | --- |
+| `setup.install` runs through `sh -c` **as root** unless the step says `user: agent` | |
+| `setup.files` are written at start **as the agent user** | |
+| An argument value is spliced into the YAML as **raw text before it is parsed** | The `pattern` is what stops a value breaking out of a shell string. Never pass a secret as an argument. |
+| `sbx kit validate` checks structure only | A `**.example.com` rule validates cleanly. Validation is not enforcement. |
+
+### Host reach and credentials
+
+| Fact | Note |
+| --- | --- |
+| `host.docker.internal` is translated by the proxy to `localhost` | The policy has to allow `localhost:PORT`. `127.0.0.1` and LAN addresses never work from inside a sandbox. |
+| `offline_access` is requested only when the scope set came from the recorded defaults or the resource's requirements | An explicit `--scope` is sent exactly as given, without it. Existing credentials are not upgraded in place: re-run `sbx mcp auth`. |
+| The gateway's own tools are `mcp-exec`, `code-mode` and `<server>-authorize` | Dynamic mode adds `mcp-find`, `mcp-add` and `mcp-config-set`; static mode does not expose the dynamic three. |
+| `sbx mcp add` has no `--client-secret` flag | A confidential client keeps its secret at `sbx secret set mcp:<server>:client_secret`, bound to an OAuth identity. |
+| A `--header` value's `${placeholder}` is filled from `sbx secret set mcp:<server>:<placeholder>` | `--header` is refused with `--command` and with `--local`. |
+

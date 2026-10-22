@@ -1193,7 +1193,9 @@ sbx exec learn-auto -- sh -c 'exit 3'
 echo "exit status was $?"
 ```
 
-The `echo` line is the important one. `sbx exec` returns the command's own exit status, so a script can branch on it. Note the order: `sbx exec` has to run before the `echo`, or the status you read is the status of something else.
+The `echo` line is the important one. `sbx exec` returns the command's own exit status, so a script can branch on it. Note the order: `sbx exec` has to run before the `echo`, or the status you read is the status of something else. [verified]
+
+One more thing to know before you build on it. When `sbx exec` has to start a stopped sandbox first, the "started successfully" message goes to **stderr**, not stdout. A script that captures only stdout sees an empty result and a zero status, and concludes the command printed nothing. It did not: it printed to the other stream. [verified]
 
 ##### What you should see
 

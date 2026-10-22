@@ -6,9 +6,11 @@ A symptom-to-fix reference. Find the symptom, check the cause, run the fix.
 
 Two kinds of entry live here. Most are backed by
 [`00-verified-facts.md`](00-verified-facts.md) and say "the ledger says" or
-point at a section. The rest are marked **not verified in the ledger** — they
-were observed in the v0.45.0-rc2 binary on this Mac, and you should treat
-them as strong hints rather than guarantees.
+point at a section. The rest are marked **not in the ledger** — they come
+from the `--help` output and log strings of the v0.45.0-rc2 binary on this
+Mac, or from `FIELD-GUIDE.md` in the repository root, and you should treat
+them as strong hints rather than guarantees. Where a guide cites
+`FIELD-GUIDE.md`, it says so at the point of use.
 
 ## Before you start
 
@@ -49,13 +51,13 @@ exit does not mean an upload happened**.
 | A kit source is refused | `kit.allowedSources` does not cover it | Read, merge, then `sbx settings set kit.allowedSources '[...]'` |
 | `ssh <name>.sbx` fails | No active Docker login, or no managed config | `sbx login`, then `sbx setup ssh` |
 | Non-HTTP traffic fails | The proxy is HTTP-aware; L4 rules decide | `sbx policy log`; the `PROXY` column reads `network` |
-| A host service is unreachable from the sandbox | The sandbox is not on the host's network | See §4 — **not verified in the ledger** |
+| A host service is unreachable from the sandbox | The sandbox is not on the host's loopback | Use `host.docker.internal` and allow the host's `localhost:PORT` (§4) |
 | The agent cannot authenticate to a provider | No credential was injected | `sbx policy log`; read the `PROXY` column (§5) |
-| An MCP stream stalls | HTTP/2 | Re-register with `--disable-http2` — **not verified in the ledger** |
+| An MCP stream stalls | HTTP/2 through a proxy that mangles it | Re-register with `--disable-http2` (§8) |
 | TLS fails against a self-signed CA | The CA is not in the sandbox's trust store | `sbx cp` the CA, then `update-ca-certificates` (§6) |
 | `docker build` in the sandbox fails on a certificate | The build's image has no CA | Install the CA **in the image**, not the sandbox (§6) |
 | Out of disk space in the sandbox | The volume is at its size limit | Raise the size and recreate (§3) |
-| Slow file operations in a large direct-mode repo | The workspace mount is the bottleneck | Use clone mode (§3) — **not verified in the ledger** |
+| Slow file operations in a large direct-mode repo | Direct-mode virtio-fs caching is not helping | Turn the cache off, or use clone mode (§3) |
 | "dubious ownership" from Git in clone mode | UID mismatch between the container and the mounted files | `git config --global --add safe.directory …` inside the sandbox — **not verified in the ledger** |
 | Commits are not signed | The host Git identity is not set | Set `user.name` and `user.email` on the **host** |
 | SSH is configured twice | A stale managed block in `~/.ssh/config` | Remove or rename the reported `Host *` block |
@@ -158,19 +160,21 @@ sbx settings set sandbox.disk.dockerVolume 50g
 The volume is created with the sandbox, so a bigger value applies to **new
 sandboxes**. Raise it, then recreate.
 
-> The **three size environment variables** are **not verified in the ledger**.
-> Observed in the v0.45.0-rc2 binary:
+> The **three size environment variables** are in ledger §18, observed in the
+> v0.45.0-rc2 binary on this Mac:
 >
-> | Variable | Scope |
-> | --- | --- |
-> | `DOCKER_SANDBOXES_ROOT_SIZE` | The sandbox's root filesystem size. |
-> | `DOCKER_SANDBOXES_DOCKER_SIZE` | The sandbox's `/var/lib/docker` volume size. |
-> | `DOCKER_SANDBOXES_CLONED_WORKSPACE_SIZE` | The size of a clone-mode workspace. |
+> | Variable | Scope | Default |
+> | --- | --- | --- |
+> | `DOCKER_SANDBOXES_ROOT_SIZE` | The sandbox's root filesystem. | 20 GB |
+> | `DOCKER_SANDBOXES_DOCKER_SIZE` | The sandbox's `/var/lib/docker` volume. | 10 GB |
+> | `DOCKER_SANDBOXES_CLONED_WORKSPACE_SIZE` | A clone-mode workspace. | — |
 >
 > They are daemon-side environment variables, read when the sandbox is
-> created. Because they are not in the ledger, set them through
+> created. **They cannot resize an existing sandbox** — raise them, then
+> recreate. Because they are not in the ledger, set them through
 > `sandbox.disk.dockerVolume` where a setting exists, and treat the
-> environment variables as an unverified escape hatch.
+> environment variables as a second, less documented route to the same
+> limit.
 
 The two sizing flags at creation are separate from disk size:
 
@@ -192,7 +196,8 @@ to 512 MiB–32 GiB, and a maximum of max(75% of host memory, 512 MiB).
 The practical answer is the workspace mode, not a knob:
 
 - **Use clone mode** for anything large. The agent works on an in-container
-  copy; the host's filesystem is not on the hot path.
+  copy; the host's filesystem is not on the hot path. Clone mode always
+  enables the virtio-fs cache.
 - **Check where the workspace lives.** A directory under a synced or
   network-backed folder (a cloud-sync client, a network mount, a deeply
   nested path) will be slow no matter what the sandbox does. The workshop's
@@ -200,10 +205,10 @@ The practical answer is the workspace mode, not a knob:
   folder.
 - **Check `sbx diagnose --json`** for the ZFS finding. It affects image
   builds, not general file I/O.
-- There is a `DOCKER_SANDBOXES_ENABLE_VIRTIOFS_CACHE` environment variable
-  and a matching "virtiofs caching" setting surface in the v0.45.0-rc2
-  binary. **Not verified in the ledger.** Do not flip it without a
-  measurement.
+- **If direct-mode virtio-fs caching is not helping, turn it off.** Create
+  the sandbox with `DOCKER_SANDBOXES_ENABLE_VIRTIOFS_CACHE=0`. The variable
+  name is observed in the v0.45.0-rc2 binary and corroborated by
+  `FIELD-GUIDE.md` in this repository; the ledger does not record it.
 
 ## 4. A host service is unreachable from the sandbox
 
@@ -214,25 +219,40 @@ daemon** (ledger §10). The sandbox is not on your host's loopback
 interface: `localhost` inside the sandbox is the sandbox's own loopback, not
 yours.
 
-> The specific `host.docker.internal` and `localhost:PORT` mechanics are
-> **not verified in the ledger**. The ledger states the boundary and stops
-> there. The following is observed in the v0.45.0-rc2 binary on this Mac and
-> should be confirmed on your host before you rely on it.
+The rule, from `FIELD-GUIDE.md` in this repository (the ledger states the
+boundary but not this mechanic):
+
+> Sandboxes reach the host through `host.docker.internal`, and the proxy
+> translates it to `localhost`, which the policy has to allow.
+> `sbx policy allow network localhost:11434`, then use
+> `host.docker.internal`. **`127.0.0.1` and LAN addresses never work.**
+
+Three steps, in order:
+
+```bash
+# 1. Allow the destination in the policy. The rule names the host's
+#    loopback address, because that is what the proxy translates to.
+sbx policy allow network localhost:11434
+
+# 2. Reach it from the sandbox by the special name, not by 127.0.0.1.
+sbx exec my-sandbox -- curl -fsS --max-time 5 http://host.docker.internal:11434/api/tags
+```
 
 | You want the sandbox to reach | Do this |
 | --- | --- |
-| A service on the host's loopback, e.g. `localhost:3102` | Publish it to a host port and reach it from the sandbox through the host's non-loopback address. `localhost` inside the sandbox will not work. |
-| A service on the host's LAN address | Reach it by that address, subject to the network policy. |
+| A service on your Mac, bound to loopback | `sbx policy allow network localhost:<port>`, then use `host.docker.internal:<port>`. |
+| A service on your Mac, bound to `0.0.0.0` | Same, via `host.docker.internal`. |
+| A service on your LAN address | **Does not work.** Use `host.docker.internal` and a loopback binding on the host instead. |
 | A host-side tool | Put it behind a **host-side stdio MCP server** and register it with `sbx mcp add --command`. That is the supported path (ledger §10). |
 
 Two rules that follow:
 
-1. **`localhost:PORT` inside the sandbox is the sandbox's own loopback.** A
-   service you published on the host is not reachable at `localhost` from
-   inside.
+1. **`127.0.0.1` and LAN addresses never work from inside the sandbox.** The
+   name to use is `host.docker.internal`, and the policy rule names the
+   host's `localhost:<port>`.
 2. **A host-side stdio MCP server is the sanctioned bridge.** It is also the
    one crossing of the hypervisor boundary, and it runs with your host user's
-   full permissions — see `04-mcp-connectors.md` §7.
+   full permissions — see `04-mcp-connectors.md` §8.
 
 Check what the policy thinks before assuming it is a network problem:
 
@@ -240,6 +260,10 @@ Check what the policy thinks before assuming it is a network problem:
 sbx policy check network api.github.com
 sbx policy log --json
 ```
+
+`sbx policy check network` evaluates **network** authorisation, not HTTP
+method or path (ledger §5). A bare host or IP literal is evaluated with port
+443; a `host:port` pair is evaluated as written.
 
 ## 5. The agent cannot authenticate
 
@@ -251,7 +275,7 @@ ledger §10:
 | `forward` | A credential was injected | The credential was injected. A 401 is upstream of the proxy — check the key, its scope, its quota. |
 | `forward-bypass` | No injection happened | The agent had no credential to inject. Import or store one. |
 | `transparent` | Policy was enforced, no injection | The request was allowed through untouched. A failure here is the provider's. |
-| `network` | Non-HTTP traffic | Not an HTTP request. See §6. |
+| `network` | Non-HTTP traffic | Not an HTTP request. See "Non-HTTP traffic fails" below. |
 | `browser-open` | A browser open | The sandbox tried to open a host browser. |
 
 ```bash
@@ -290,6 +314,37 @@ logins that redirect to `localhost`.
 sbx settings set browser.enabled true
 ```
 
+### The agent cannot install packages
+
+Almost always the network policy. The presets are `Open`, `Balanced` (the
+recommended default: deny by default, common dev sites allowed) and
+`Locked Down` (ledger §5). Under `Balanced`, a package index you have never
+allowed is blocked.
+
+```bash
+# Is the destination allowed at all?
+sbx policy check network pypi.org
+
+# Allow it, for one sandbox rather than for all of them.
+sbx policy allow network --sandbox my-sandbox pypi.org
+sbx policy allow network --sandbox my-sandbox files.pythonhosted.org
+```
+
+Two things about the approval flow (ledger §5):
+
+- Without organisation governance, a request matching no rule **asks for
+  approval** rather than being denied outright. The blocked request is denied
+  immediately; the approval affects **later** requests. An agent that retries
+  picks it up next time, so a "denied" first attempt is not proof the
+  destination is unreachable.
+- Approved destinations appear in
+  `sbx policy ls --wide --created-via approval`, and they are wiped by
+  `sbx policy reset` along with every other local rule.
+
+If the package manager fails with a DNS or connection error rather than a
+policy denial, check `sbx policy log` for the destination and read the
+`PROXY` column.
+
 ### Non-HTTP traffic fails
 
 The proxy is HTTP-aware. A raw TCP or UDP connection is decided at the
@@ -297,9 +352,15 @@ network (L4) layer, where the rules are whole-destination:
 `connect:tcp`, `connect:udp`.
 
 ```bash
-sbx policy allow --help
+sbx policy allow network --help
 sbx policy check network api.github.com
+sbx policy check network --protocol udp api.github.com
 ```
+
+`sbx policy allow network` takes a comma-separated list of hosts, domains,
+IP addresses or CIDR prefixes, with an optional `--protocol` (TCP by
+default) and an optional `--sandbox` to scope the rule to one sandbox
+rather than to all of them.
 
 Known open bug (ledger §17): **UDP to a denied hostname can be permitted via
 an allow rule for that hostname's resolved IP, when multiple hostnames are
@@ -339,10 +400,13 @@ destination; if the destination exists as a directory the source goes inside
 it. From v0.49.1 a missing destination directory is reported without extra
 tar errors — on v0.45.0-rc2, create the destination directory yourself.
 
-> The `update-ca-certificates` step is **not verified in the ledger** as a
-> recipe. What the ledger does verify: `sbx cp`'s semantics (ledger §15), and
-> that the same package is the one to upgrade in place after the eMudhra CA
-> compromise (ledger §9):
+> The `update-ca-certificates` step is **not in the ledger** as a recipe.
+> `FIELD-GUIDE.md` in this repository gives the same three steps — "copy the
+> certificate in with `sbx cp`, install it with `sbx exec` and
+> `update-ca-certificates`" — and marks it verified. What the ledger does
+> verify independently: `sbx cp`'s semantics (ledger §15), and that the same
+> package is the one to upgrade in place after the eMudhra CA compromise
+> (ledger §9):
 >
 > ```bash
 > sbx exec my-sandbox -- sudo apt-get update
@@ -351,8 +415,10 @@ tar errors — on v0.45.0-rc2, create the destination directory yourself.
 
 ### Do not override `SSL_CERT_FILE`
 
-> **Not verified in the ledger.** Observed in the v0.45.0-rc2 binary, which
-> sets `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` to
+> **Not in the ledger.** `FIELD-GUIDE.md` in this repository states the rule:
+> "Do not override `SSL_CERT_FILE`: it replaces the whole bundle and breaks
+> the credential proxy." It is also observable in the v0.45.0-rc2 binary,
+> which sets `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` to
 > `/etc/ssl/certs/ca-certificates.crt` for processes it starts.
 
 Pointing `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE` at your
@@ -464,7 +530,9 @@ its error messages rather than guessing.
 
 ### A stream stalls over HTTP/2
 
-> **Not verified in the ledger.** Observed in the v0.45.0-rc2 binary.
+> **Not in the ledger.** `FIELD-GUIDE.md` in this repository calls it "The
+> fix for MCP streams that stall behind a proxy" and marks it verified; the
+> flag is also present in the v0.45.0-rc2 binary's own help text.
 
 `sbx mcp add` has a `--disable-http2` flag: "Do not negotiate HTTP/2 for this
 remote server, leaving HTTP/1.1." It applies to `--url` servers.

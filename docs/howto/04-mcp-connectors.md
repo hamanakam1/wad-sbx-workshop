@@ -211,16 +211,29 @@ this client.
 (`openid`, `email`, `profile`, `offline_access`). It is requested when
 nothing else selected a set and the server advertises it.
 
+The rule that ties it to the refresh token, from `FIELD-GUIDE.md` in this
+repository (the ledger does not record it):
+
+> `sbx mcp auth <name>` runs the OAuth flow. It asks for `offline_access`
+> when the server advertises it **and** the scope set came from the recorded
+> defaults or from the resource's requirements, which is what lets the server
+> issue a refresh token. **An explicit `--scope` is sent exactly as given,
+> without it.** Credentials are not upgraded in place: re-run the command to
+> get a grant with a refresh token.
+
+Two practical consequences:
+
+- If you pass `--scope` explicitly, you get exactly that scope set. If your
+  intent is a long-lived grant that can refresh, let the fallback pick
+  `offline_access` instead of naming scopes by hand.
+- An existing credential is **not** upgraded in place. Re-run
+  `sbx mcp auth <name>` to obtain a grant that carries a refresh token.
+
 The refresh path is separate from the scope list. From the `sbx mcp auth`
 help: if the stored credential is expired, `sbx` asks the control plane to
 refresh it first, and **only falls back to interactive OAuth when the refresh
 needs user consent**. So a routine expiry is not an interruption; only a
 refresh that needs your consent reopens the browser.
-
-> The specific link between the `offline_access` scope and the issuing of a
-> refresh token is standard OAuth behaviour, but the ledger does not state it
-> and neither does the local help text. **Not verified in the ledger.** What
-> is verified is the fallback set and the refresh-first behaviour above.
 
 ### `--resource`
 
@@ -332,9 +345,11 @@ sbx mcp add notion --url https://mcp.notion.com/mcp
 sbx mcp load notion --sandbox my-sbx
 ```
 
+The attachment **survives a restart** of the sandbox.
+
 `sbx mcp unload` is new in v0.48.0 (ledger §1) and is the inverse: it takes a
 server out of a running sandbox's gateway. It is not in the v0.45.0-rc2 binary
-on this Mac.
+on this Mac, and it is supported for local sandboxes only.
 
 Under `--cloud` there is no local registration: the cloud gateway resolves the
 server name itself, and the sandbox may be given by name or `sbx_` ID.
@@ -360,15 +375,18 @@ from `sbx mcp catalog`.
 A dynamic gateway exposes discovery and configuration tools to the agent, so
 the agent can find and attach MCP servers itself during a session.
 
-> The dynamic tool names and their exact behaviour are **not in the ledger**.
-> The following is observed in the v0.45.0-rc2 binary on this Mac, from its
-> own log and description strings:
+Leave `--static-mcp` off and the gateway offers `mcp-find`, `mcp-add` and
+`mcp-config-set`. The agent can attach **any** server registered on this
+host, including one registered a minute ago.
+
+> The dynamic tool names are in ledger §18, observed in the v0.45.0-rc2 binary
+> on this Mac. The following is that observation in full, with the names the
+> gateway uses for them:
 >
 > - `mcp-find` — "Search available MCP servers. Returns servers that can be
 >   added to this session via mcp-add."
 > - `mcp-add` — attaches a server to the session.
 > - `mcp-config-set` — sets configuration for a server.
-> - `mcp-exec` and `code-mode` are also registered on the gateway.
 >
 > The binary also states that on a **static-mcp** sandbox the dynamic tools
 > `(mcp-find, mcp-add, mcp-config-set)` are **suppressed**, and only
@@ -382,13 +400,33 @@ The practical difference:
 | Set decided by | You, at creation | The agent, during the session |
 | Can change later | No | Yes, within the session |
 | Discovery tools | Not exposed | `mcp-find` and friends |
+| Blast radius | Exactly the servers you named | Exactly as broad as your registration list |
 | Good for | A repeatable, auditable test | An exploratory session |
 
 For automation, use static. A dynamic set means the tool list can change
 between two runs of the same script, which is the same class of problem as the
-JSON shape change in `03-structured-output-and-parsers.md`.
+JSON shape change in `03-structured-output-and-parsers.md`. It also means an
+agent can reach a server you registered for a different purpose.
 
-## 6. The built-in gateway tools
+## 6. The gateway's own tools
+
+Every sandbox gets a gateway with a few tools of its own, separate from the
+tools of the servers you registered.
+
+> Not in the ledger. From `FIELD-GUIDE.md` in this repository, and observed in
+> the v0.45.0-rc2 binary.
+
+| Tool | What it does |
+| --- | --- |
+| `mcp-exec` | Runs a named tool. |
+| `code-mode` | Builds an ephemeral tool that calls selected ones. |
+| `<server>-authorize` | Starts an OAuth flow for a server that needs one. |
+| `mcp-find`, `mcp-add`, `mcp-config-set` | The dynamic-mode discovery tools, described above. |
+
+Under organisation governance these are governed **separately** from the
+registered servers, as `MCP::Primordial` resources (ledger §5).
+
+## 7. The built-in `sbx_*` tools
 
 The gateway also carries a set of `sbx_*` tools that let an agent manage
 sandboxes directly.
@@ -416,7 +454,7 @@ behaves:
   operation** rather than assume the result, and to hand the user a command
   rather than run it when the user is present.
 
-## 7. Host stdio servers versus container servers
+## 8. Host stdio servers versus container servers
 
 This is the distinction that decides your whole design.
 
@@ -454,7 +492,7 @@ everything inside the VM. A host-side stdio server is the one deliberate
 crossing, and it crosses with your full user permissions. That is why the
 connector below is written to refuse rather than to act.
 
-## 8. This workshop's connector: `connectors/sbx-mcp/`
+## 9. This workshop's connector: `connectors/sbx-mcp/`
 
 ### What it is
 
@@ -672,10 +710,12 @@ python3 connectors/sbx-mcp/test_sbx_mcp.py
   client, and which advertise a scope set are per-provider facts the ledger
   does not record.
 - **The dynamic tool set.** The `mcp-find` / `mcp-add` / `mcp-config-set`
-  tools are described from the v0.45.0-rc2 binary only. **Not verified in the
-  ledger.**
-- **The built-in `sbx_*` gateway tool list.** Also observed in the binary
-  only. **Not verified in the ledger.**
+  tools are described from the v0.45.0-rc2 binary and from `FIELD-GUIDE.md`.
+  **Not in the ledger.**
+- **The built-in `sbx_*` gateway tool list.** Observed in the binary only.
+  **Not in the ledger.** The `sbx_*` family is the assistant's own toolbox;
+  it is not the same thing as the gateway's `mcp-exec` / `code-mode` tools
+  in §6, and the two are governed differently.
 - **`sbx mcp unload` details.** It exists from v0.48.0 (ledger §1), but the
   ledger does not describe its flags or its semantics, and it is not in the
   local binary.

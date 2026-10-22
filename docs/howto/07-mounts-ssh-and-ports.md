@@ -277,6 +277,12 @@ service reachable from the network your host is on, and the sandbox's own
 network policy does not govern inbound host connections the way it governs
 the sandbox's outbound traffic.
 
+There is a second half to this that is easy to miss: **the service inside
+the sandbox must itself listen on all interfaces.** A process bound to
+`127.0.0.1` inside the sandbox is unreachable through a published port,
+whatever the host side is bound to. The host binding and the in-sandbox
+listener are two different things, and both have to be right.
+
 For a local-only preview, keep the default. The workshop's
 `factory/sbxenv.yaml` does exactly that — `hostIP: 127.0.0.1` for port 3102
 — stated explicitly rather than left to the default.
@@ -309,6 +315,23 @@ From v0.48.0 (ledger §4):
 ```bash
 sbx ports my-sandbox --json
 ```
+
+The **local** row shape is the same on v0.45.0-rc2 as it is from v0.48.0.
+Verified on this Mac:
+
+```json
+[
+  {
+    "host_ip": "127.0.0.1",
+    "host_port": 18080,
+    "sandbox_port": 8080,
+    "protocol": "tcp4"
+  }
+]
+```
+
+So the `jq` below works today and keeps working. The **cloud** row shape is
+the one that changed: `port` became `sandbox_port` plus a `url`.
 
 ### Surviving a restart, and the ephemeral-port trap
 
@@ -371,9 +394,12 @@ sandbox. A saved mount that cannot be restored fails the next start.
 - **Editor-integration configuration.** The supported list is in ledger §14;
   the setup steps for each editor are not.
 - **`sbx setup ssh --auto-create` details.** That it exists in v0.48.0 is in
-  the ledger. Which sandbox template it uses, and how it names the
+  the ledger, and §18 records that the v0.45.0-rc2 binary on this Mac does
+  not have it. Which sandbox template it uses, and how it names the
   connections, are **not verified in the ledger**.
 - **Windows and Linux paths.** The mount rules here are platform-neutral, but
   the host paths in the examples are macOS-shaped.
-- **Published-port behaviour across a downgrade.** The ledger does not
-  describe it, and the persisted port state is versioned with the daemon.
+- **Published-port behaviour across a downgrade.** Ledger §18 records that
+  publishing persists across a restart and that an OS-assigned host port can
+  change. It does not describe what a downgrade does to the persisted port
+  state, which is versioned with the daemon.
