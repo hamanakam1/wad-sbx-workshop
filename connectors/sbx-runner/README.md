@@ -66,6 +66,20 @@ file: it names the files, their sizes and their modes, so a later reader can
 tell whether this was the same tree. The harness digest says which version of
 this code produced the receipt.
 
+On Unix, exec capture drains stdout and stderr concurrently and counts every
+byte, while retaining only the last 16 KiB per stream plus a truncation marker
+when needed. A noisy command can finish with exact receipt byte totals without
+keeping its complete output in parent memory. The pipe reader uses
+bounded read chunks and one deadline for both output drainage and child exit;
+on timeout it kills and reaps the local child and closes its pipes.
+
+This bound applies only to Unix exec capture. **Windows exec still captures
+complete output in memory**, because Windows pipes cannot use this selector
+implementation. Metadata and control commands on every platform, including
+JSON reads and sandbox creation/removal, also use `Sbx.run` and retain complete
+output. Their output is not silently truncated, and their existing lifecycle
+behaviour is unchanged.
+
 ## Modes
 
 | Mode | What the workspace does inside the sandbox |
@@ -100,10 +114,15 @@ code. The tree digest makes that difference visible instead of silent.
 python3 test_sbx_runner.py
 ```
 
-The suite fakes `sbx` at the subprocess boundary, so no sandbox, daemon or
-login is needed. It covers the version parsing, the capability boundaries at
+The suite uses fake sbx responses and synthetic Python child processes, so
+no sandbox, daemon or login is needed. It covers the version parsing, the capability boundaries at
 each release, the list-shape normalisation for both layouts, the argument
 construction for each mode, the output truncation and the receipt's shape.
 It also checks clone selection through the command-line entry point from a
 different directory, including agreement between the create arguments and
 the receipt. The MCP connector's suite covers the same selection boundary.
+On Unix, synthetic children also exercise concurrent large stdout/stderr,
+exact byte totals and tails, a parent-memory ceiling, and timeout cleanup
+before and after the output pipes close. A mocked Windows branch checks that
+exec uses the existing capture path and preserves byte counts and tails;
+this does not verify a Windows runtime.

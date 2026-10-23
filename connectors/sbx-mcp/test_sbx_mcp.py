@@ -257,6 +257,7 @@ class RunnerIntegrationTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"SBX_MCP_ALLOWED_COMMANDS": "npm test"}), \
                     mock.patch.object(mcp, "_sandbox", return_value=sbx), \
                     mock.patch.object(sbx, "run", return_value=(0, b"", b"")) as run, \
+                    mock.patch.object(sbx, "run_exec", return_value=runner.ExecCapture(0, 0, 0, b"", b"")) as execute, \
                     mock.patch.object(runner, "build_receipt", wraps=runner.build_receipt) as build:
                 result = mcp.tool_sbx_run_test({
                     "command": ["npm", "test"], "workspace": str(workspace)})
@@ -264,6 +265,8 @@ class RunnerIntegrationTests(unittest.TestCase):
             self.assertIn("--clone", create_call)
             self.assertIn(str(workspace.resolve()), create_call)
             self.assertEqual(build.call_args.kwargs["workspace"], str(workspace))
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[0][-3:], ["--", "npm", "test"])
             self.assertEqual(run.call_args_list[-1].args[0][0], "rm")
             self.assertEqual(result["outcome"], "pass")
 

@@ -192,8 +192,9 @@ install GNU coreutils and use `gtimeout`:
 gtimeout --signal=KILL 900 sbx exec "$NAME" -- pytest -q
 ```
 
-The runner's approach is better: it can kill the child, record the timeout in
-the receipt, and still remove the sandbox.
+On an exec timeout, the runner kills and reaps the local sbx child and closes
+its pipes. It then attempts to remove the already-created sandbox unless
+`--keep` is set. A timeout raises an error; it does not produce a receipt.
 
 ## 7. Capturing JUnit XML
 
@@ -408,10 +409,15 @@ Schema `sbx-sandbox-test-receipt-v1`. It carries:
   the exit code is 0, `fail` otherwise).
 - `notes` — the create step, and the removal step.
 
-Output is bounded. The tail kept per stream is 16 KiB, with a
-`...[truncated]...` marker; the full receipt is refused above 1 MiB. The
-byte counts survive the truncation, so you can still see that a test printed
-40 MiB.
+On Unix, exec output is drained concurrently from both streams with bounded memory.
+The tail kept per stream is 16 KiB, with a `...[truncated]...` marker when
+needed; the full receipt is refused above 1 MiB. Byte counts are accumulated
+as output arrives, so you can still see that a test printed 40 MiB without
+retaining those 40 MiB in memory. The same deadline covers output drainage
+and waiting for the child to exit, including when it closes its pipes early.
+Windows exec retains the existing full capture in memory. Metadata and control
+commands on every platform also capture complete output; this exec bound does
+not apply to JSON reads or sandbox creation/removal.
 
 ### Running it
 

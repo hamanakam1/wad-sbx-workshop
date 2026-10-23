@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Tests for the sandbox runner.
 
-Nothing here touches a real sandbox. The sbx binary is faked at the
-subprocess boundary so the tests exercise the argument construction, the
-version-compat shims, the shape normalisation and the receipt assembly
-without a daemon, a login or a hypervisor.
+Nothing here touches a real sandbox. Fake sbx responses exercise argument
+construction, version compatibility and receipt assembly. Synthetic Python
+children exercise real exec pipes, memory bounds and timeout cleanup without
+a daemon, a login or a hypervisor.
 
 Run with:  python3 connectors/sbx-runner/test_sbx_runner.py
 """
@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
+import tracemalloc
 import unittest
 from unittest import mock
 
@@ -46,6 +48,10 @@ class FakeSbx(runner.Sbx):
                     return response(argv)
                 return response
         return 0, b"", b""
+
+    def run_exec(self, args, timeout=None):
+        rc, out, err = self.run(args, timeout=timeout)
+        return runner.ExecCapture(rc, len(out), len(err), runner._tail(out), runner._tail(err))
 
 
 class VersionTests(unittest.TestCase):
@@ -242,6 +248,116 @@ class ExecTests(unittest.TestCase):
         self.assertLess(len(result["stdout_tail"]), runner.MAX_OUTPUT_TAIL + 100)
         self.assertIn("truncated", result["stdout_tail"])
         self.assertEqual(result["stdout_bytes"], len(blob))
+
+
+class ExecProcessTests(unittest.TestCase):
+    """Exercise real pipes with synthetic Python children, never sbx."""
+
+    def _run(self, program, timeout=10):
+        class PythonChildSbx(runner.Sbx):
+            def _argv(self, args):
+                return [sys.executable, "-u", "-c", program]
+
+        run = runner.SandboxRun(PythonChildSbx(binary=sys.executable),
+                                "synthetic-test", mode="mountless", run_timeout=timeout)
+        run.created = True
+        return run
+
+    @unittest.skipUnless(os.name == "posix", "bounded pipe capture requires Unix")
+    def test_large_concurrent_streams_keep_exact_counts_and_tails_with_bounded_memory(self):
+        program = """
+import os
+import threading
+
+def emit(fd, byte, ending):
+    for _ in range(128):
+        block = byte * 65536
+        while block:
+            block = block[os.write(fd, block):]
+    os.write(fd, ending)
+
+threads = [threading.Thread(target=emit, args=(1, b'o', b'stdout-end\\n')),
+           threading.Thread(target=emit, args=(2, b'e', b'stderr-end\\n'))]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+raise SystemExit(7)
+"""
+        run = self._run(program)
+        tracemalloc.start()
+        try:
+            result = run.exec(["synthetic-command"])
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(result["exit_code"], 7)
+        for stream, fill in (("stdout", "o"), ("stderr", "e")):
+            ending = f"{stream}-end\n"
+            self.assertEqual(result[f"{stream}_bytes"], 8 * 1024 * 1024 + len(ending))
+            self.assertEqual(result[f"{stream}_tail"],
+                             "...[truncated]..." + fill * (runner.MAX_OUTPUT_TAIL - len(ending)) + ending)
+        self.assertLess(peak, 4 * 1024 * 1024,
+                        f"exec capture retained too much parent memory: {peak} bytes")
+
+    def test_short_output_preserves_bytes_and_replacement_decoding(self):
+        run = self._run("import os; os.write(1, b'out\\xff'); os.write(2, b'err\\xfe')")
+        result = run.exec(["synthetic-command"])
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["stdout_bytes"], 4)
+        self.assertEqual(result["stderr_bytes"], 4)
+        self.assertEqual(result["stdout_tail"], "out\ufffd")
+        self.assertEqual(result["stderr_tail"], "err\ufffd")
+
+    def test_windows_uses_existing_capture_with_exact_counts_and_tails(self):
+        sbx = runner.Sbx(binary="/fake/sbx")
+        args = ["exec", "synthetic-test", "--", "false"]
+        out = b"x" * (runner.MAX_OUTPUT_TAIL + 3) + b"\xff"
+        err = b"err\xfe"
+        with mock.patch.object(runner.os, "name", "nt"), \
+                mock.patch.object(sbx, "run", return_value=(9, out, err)) as legacy_run, \
+                mock.patch.object(runner.selectors, "DefaultSelector",
+                                  side_effect=AssertionError("Windows pipes are not selectable")) as selector:
+            result = sbx.run_exec(args, timeout=23)
+        legacy_run.assert_called_once_with(args, timeout=23)
+        selector.assert_not_called()
+        self.assertEqual(result.exit_code, 9)
+        self.assertEqual(result.stdout_bytes, len(out))
+        self.assertEqual(result.stderr_bytes, len(err))
+        self.assertEqual(result.stdout_tail,
+                         b"...[truncated]..." + b"x" * (runner.MAX_OUTPUT_TAIL - 1) + b"\xff")
+        self.assertEqual(result.stderr_tail, err)
+
+    def _assert_timeout_reaps_child(self, program):
+        processes = []
+        original_popen = runner.subprocess.Popen
+
+        def tracked_popen(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        started = time.monotonic()
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=tracked_popen):
+            with self.assertRaises(runner.RunnerError) as raised:
+                self._run(program, timeout=0.3).exec(["synthetic-command"])
+        self.assertEqual(raised.exception.code, "sbx_timeout")
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(len(processes), 1)
+        process = processes[0]
+        self.assertIsNotNone(process.returncode)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+
+    @unittest.skipUnless(os.name == "posix", "child reaping check requires Unix waitpid")
+    def test_timeout_kills_and_reaps_the_owned_child(self):
+        self._assert_timeout_reaps_child("import time; print('ready', flush=True); time.sleep(10)")
+
+    @unittest.skipUnless(os.name == "posix", "child reaping check requires Unix waitpid")
+    def test_timeout_still_applies_after_both_output_pipes_close(self):
+        self._assert_timeout_reaps_child("import os, time; os.close(1); os.close(2); time.sleep(10)")
 
 
 class ReceiptTests(unittest.TestCase):

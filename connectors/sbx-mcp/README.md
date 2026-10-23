@@ -74,6 +74,11 @@ handle a nullable count. The tool still returns a successful status report
 with the available version, daemon state and capabilities; an unavailable
 inventory does not turn the whole report into a tool error.
 
+On Unix, `sbx_run_test` uses the runner's streaming exec capture: stdout and
+stderr retain bounded tails while their byte totals remain exact. Windows
+exec and metadata/control calls on every platform still capture their full
+output in memory.
+
 ## The transport
 
 Newline-delimited JSON-RPC 2.0 on stdio, which is what MCP's stdio

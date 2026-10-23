@@ -28,18 +28,20 @@ Boundaries that are not negotiable:
   * A workspace is never written back to the host by default: `--mode clone`
     is the default because the agent-side clone is a copy, and the host
     working tree is only ever touched by an explicit `--mode direct`.
-  * Output is bounded. A test that prints a megabyte is truncated in the
-    receipt, not stored whole.
+  * On Unix, exec output is counted as it arrives, retaining bounded tails.
+    Windows exec and all metadata/control commands capture full output.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shutil
 import subprocess
 import sys
@@ -49,7 +51,8 @@ from datetime import datetime, timezone
 SCHEMA = "sbx-sandbox-test-receipt-v1"
 HARNESS_VERSION = "1.0.0"
 
-# Bound on everything the runner holds in memory at once.
+# Maximum bytes read from a Unix exec pipe in one operation. Windows exec
+# and all metadata/control commands use Sbx.run and capture full output.
 MAX_CAPTURE_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT = 900
@@ -68,6 +71,17 @@ class RunnerError(RuntimeError):
         super().__init__(code if not detail else f"{code}: {detail}")
         self.code = code
         self.detail = detail
+
+
+@dataclass(frozen=True)
+class ExecCapture:
+    """Exec byte totals remain exact even when only output tails are kept."""
+
+    exit_code: int
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_tail: bytes
+    stderr_tail: bytes
 
 
 # --------------------------------------------------------------------------
@@ -126,7 +140,7 @@ def capabilities(version):
 # --------------------------------------------------------------------------
 
 class Sbx:
-    """A thin, bounded wrapper around the `sbx` binary."""
+    """A thin wrapper with bounded Unix exec capture around the `sbx` binary."""
 
     def __init__(self, binary=None, path=None, timeout=DEFAULT_TIMEOUT):
         self.binary = binary or shutil.which("sbx") or ""
@@ -149,7 +163,7 @@ class Sbx:
         return [self.binary, *[str(a) for a in args]]
 
     def run(self, args, timeout=None, stdin=None):
-        """Run sbx and return (returncode, stdout_bytes, stderr_bytes)."""
+        """Run sbx and return its complete (returncode, stdout, stderr)."""
         argv = self._argv(args)
         try:
             proc = subprocess.run(
@@ -161,6 +175,66 @@ class Sbx:
         except OSError as exc:
             raise RunnerError("sbx_not_runnable", exc.strerror or str(exc)) from exc
         return proc.returncode, proc.stdout or b"", proc.stderr or b""
+
+    def run_exec(self, args, timeout=None):
+        """Return exec byte counts and tails, streaming output on Unix.
+
+        This Unix pipe path inherits stdin, as exec did before. The same
+        deadline covers output drainage and waiting for the child to exit.
+        Windows retains the existing full capture because its pipe handles
+        cannot be monitored with selectors.
+        """
+        if os.name == "nt":
+            rc, out, err = self.run(args, timeout=timeout)
+            return ExecCapture(rc, len(out), len(err), _tail(out), _tail(err))
+
+        argv = self._argv(args)
+        duration = timeout or self.timeout
+        deadline = time.monotonic() + duration
+        tails = {"stdout": bytearray(), "stderr": bytearray()}
+        counts = {"stdout": 0, "stderr": 0}
+        proc = None
+        try:
+            with selectors.DefaultSelector() as selector:
+                proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, name)
+
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(argv, duration)
+                    for key, _ in selector.select(remaining):
+                        try:
+                            chunk = os.read(key.fd, MAX_CAPTURE_BYTES)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            key.fileobj.close()
+                            continue
+                        counts[key.data] += len(chunk)
+                        tail = tails[key.data]
+                        tail.extend(chunk)
+                        # One extra byte lets _tail retain its truncation marker.
+                        del tail[:max(0, len(tail) - MAX_OUTPUT_TAIL - 1)]
+
+                code = proc.wait(timeout=max(0, deadline - time.monotonic()))
+                return ExecCapture(code, counts["stdout"], counts["stderr"],
+                                   _tail(tails["stdout"]), _tail(tails["stderr"]))
+        except subprocess.TimeoutExpired as exc:
+            raise RunnerError("sbx_timeout", f"{' '.join(argv[1:])} exceeded {duration}s") from exc
+        except OSError as exc:
+            raise RunnerError("sbx_not_runnable", exc.strerror or str(exc)) from exc
+        finally:
+            if proc is not None:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+                for stream in (proc.stdout, proc.stderr):
+                    if stream is not None:
+                        stream.close()
 
     def json(self, args, timeout=None):
         """Run sbx with a JSON output flag and decode the document.
@@ -426,16 +500,16 @@ class SandboxRun:
             argv += ["--env", str(item)]
         argv += [self.name, "--", *[str(part) for part in command]]
         started = time.monotonic()
-        rc, out, err = self.sbx.run(argv, timeout=self.run_timeout)
+        captured = self.sbx.run_exec(argv, timeout=self.run_timeout)
         elapsed = round(time.monotonic() - started, 3)
         return {
             "argv": argv,
-            "exit_code": rc,
+            "exit_code": captured.exit_code,
             "seconds": elapsed,
-            "stdout_bytes": len(out),
-            "stderr_bytes": len(err),
-            "stdout_tail": _tail(out).decode("utf-8", "replace"),
-            "stderr_tail": _tail(err).decode("utf-8", "replace"),
+            "stdout_bytes": captured.stdout_bytes,
+            "stderr_bytes": captured.stderr_bytes,
+            "stdout_tail": captured.stdout_tail.decode("utf-8", "replace"),
+            "stderr_tail": captured.stderr_tail.decode("utf-8", "replace"),
         }
 
     def remove(self):
