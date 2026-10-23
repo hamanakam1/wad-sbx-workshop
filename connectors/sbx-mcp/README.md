@@ -55,7 +55,7 @@ allow `rm`.
 
 | Tool | Reads or writes | What it returns |
 | --- | --- | --- |
-| `sbx_status` | read | The client version, the daemon state, the sandbox count, and the capability set for that version. |
+| `sbx_status` | read | The client version, daemon state, sandbox count when known, discovery error when unavailable, and capability set. |
 | `sbx_list_sandboxes` | read | Every sandbox with its agent, status and workspaces. |
 | `sbx_inspect_sandbox` | read | One sandbox's full inspection record: kits, mounts, network policy, secrets and ports. |
 | `sbx_policy_check` | read | Whether a destination would be allowed, and whether an explicit rule exists. |
@@ -64,6 +64,15 @@ allow `rm`.
 
 The read tools use the same version-compat shims as the runner, so they
 report a pre-v0.48 build's list shape correctly as well as a newer one's.
+
+`sbx_status` returns `sandbox_count: null` when inventory is unavailable;
+zero means a successful query found no sandboxes. Its `sandboxes_error`
+field is `null` after success, the runner error code after a failed query,
+or `sbx_inventory_not_queried` when `daemon_state` is not `running`. In that
+last case no list query is made and no daemon is started. Consumers must
+handle a nullable count. The tool still returns a successful status report
+with the available version, daemon state and capabilities; an unavailable
+inventory does not turn the whole report into a tool error.
 
 ## The transport
 

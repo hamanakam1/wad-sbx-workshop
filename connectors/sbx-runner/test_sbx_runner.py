@@ -317,6 +317,87 @@ class TreeDigestTests(unittest.TestCase):
             self.assertEqual(digest, runner._tree_digest(other))
 
 
+class StatusCommandTests(unittest.TestCase):
+    def _status(self, state, rows=None, error=None, as_json=False):
+        sbx = mock.Mock(spec=runner.Sbx)
+        sbx.version.return_value = (0, 49, 2)
+        sbx.version_document.return_value = {
+            "client": {"version": "v0.49.2"}, "server": {"state": state}}
+        sbx.caps.return_value = runner.capabilities((0, 49, 2))
+        sbx.daemon_state.return_value = state
+        sbx.sandboxes.return_value = rows if rows is not None else []
+        sbx.sandboxes.side_effect = error
+        with mock.patch.object(runner, "Sbx", return_value=sbx), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            status = runner.main(["status", *(["--json"] if as_json else [])])
+        self.assertEqual(status, 0)
+        return sbx, json.loads(output.getvalue()) if as_json else output.getvalue()
+
+    def test_successful_empty_inventory_is_confirmed_empty(self):
+        for as_json in (False, True):
+            with self.subTest(as_json=as_json):
+                sbx, report = self._status("running", as_json=as_json)
+                sbx.sandboxes.assert_called_once_with()
+                if as_json:
+                    self.assertEqual(report["sandboxes"], [])
+                    self.assertIsNone(report["sandboxes_error"])
+                else:
+                    self.assertIn("sandboxes    0\n", report)
+                    self.assertNotIn("unavailable", report)
+
+    def test_successful_inventory_reports_the_returned_rows(self):
+        rows = [{"name": "fixture-1", "status": "running", "agent": "shell"},
+                {"name": "fixture-2", "status": "stopped", "agent": "shell"}]
+        for as_json in (False, True):
+            with self.subTest(as_json=as_json):
+                sbx, report = self._status("running", rows=rows, as_json=as_json)
+                sbx.sandboxes.assert_called_once_with()
+                if as_json:
+                    self.assertEqual(report["sandboxes"], rows)
+                    self.assertIsNone(report["sandboxes_error"])
+                else:
+                    self.assertIn("sandboxes    2\n", report)
+                    self.assertIn("fixture-1", report)
+                    self.assertIn("fixture-2", report)
+
+    def test_failed_inventory_is_unavailable_with_the_original_error_code(self):
+        for code in ("sbx_timeout", "sbx_command_failed"):
+            for as_json in (False, True):
+                with self.subTest(code=code, as_json=as_json):
+                    sbx, report = self._status(
+                        "running", error=runner.RunnerError(code, "synthetic private diagnostic"),
+                        as_json=as_json)
+                    sbx.sandboxes.assert_called_once_with()
+                    if as_json:
+                        self.assertIsNone(report["sandboxes"])
+                        self.assertEqual(report["sandboxes_error"], code)
+                    else:
+                        self.assertIn("sandboxes    unavailable\n", report)
+                        self.assertIn(code, report)
+                        self.assertNotIn("sandboxes    0\n", report)
+                    self.assertNotIn("synthetic private diagnostic", str(report))
+
+    def _assert_inventory_not_queried(self, state):
+        for as_json in (False, True):
+            with self.subTest(as_json=as_json):
+                sbx, report = self._status(state, as_json=as_json)
+                sbx.sandboxes.assert_not_called()
+                if as_json:
+                    self.assertEqual(report["daemon_state"], state)
+                    self.assertIsNone(report["sandboxes"])
+                    self.assertEqual(report["sandboxes_error"], "sbx_inventory_not_queried")
+                else:
+                    self.assertIn("sandboxes    unavailable\n", report)
+                    self.assertIn("sbx_inventory_not_queried", report)
+                    self.assertNotIn("sandboxes    0\n", report)
+
+    def test_stopped_daemon_does_not_query_inventory(self):
+        self._assert_inventory_not_queried("stopped")
+
+    def test_unknown_daemon_does_not_query_inventory(self):
+        self._assert_inventory_not_queried("unknown")
+
+
 class SelftestCommandTests(unittest.TestCase):
     def test_selftest_passes(self):
         buffer = io.StringIO()

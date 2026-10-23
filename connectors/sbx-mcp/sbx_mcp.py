@@ -128,7 +128,7 @@ def tool_definitions():
     return [
         tool("sbx_status",
              "Report the installed Docker Sandboxes CLI version, the daemon state, "
-             "and how many sandboxes exist. Read-only.",
+             "and the sandbox count when available, or why it is unavailable. Read-only.",
              {"type": "object", "properties": {}, "additionalProperties": False}),
         tool("sbx_list_sandboxes",
              "List the sandboxes on this host with their agent, status and "
@@ -192,16 +192,12 @@ def tool_sbx_status(_arguments):
     sbx = _sandbox()
     version = sbx.version()
     state = sbx.daemon_state()
-    sandboxes = []
-    if state == "running":
-        try:
-            sandboxes = sbx.sandboxes()
-        except runner.RunnerError:
-            sandboxes = []
+    sandboxes, error = runner.sandbox_inventory(sbx, state)
     return {
         "sbx_version": f"{version[0]}.{version[1]}.{version[2]}" if version else None,
         "daemon_state": state,
-        "sandbox_count": len(sandboxes),
+        "sandbox_count": len(sandboxes) if sandboxes is not None else None,
+        "sandboxes_error": error,
         "capabilities": sbx.caps(),
     }
 

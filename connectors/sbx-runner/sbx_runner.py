@@ -261,6 +261,20 @@ def normalise_sandbox_list(document, expect_bare_array=None):
     raise RunnerError("sbx_unexpected_shape", "sbx ls --json had no sandbox list")
 
 
+def sandbox_inventory(sbx, daemon_state):
+    """Return known rows or None, with a stable reason when unavailable.
+
+    A successful empty list is evidence of zero sandboxes. A skipped or
+    failed query is not, and status callers must preserve that distinction.
+    """
+    if daemon_state != "running":
+        return None, "sbx_inventory_not_queried"
+    try:
+        return sbx.sandboxes(), None
+    except RunnerError as exc:
+        return None, exc.code
+
+
 # --------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------
@@ -514,19 +528,13 @@ def command_status(sbx, as_json=False):
     document = sbx.version_document()
     caps = sbx.caps()
     state = sbx.daemon_state()
-    sandboxes = []
-    error = None
-    if state == "running":
-        try:
-            sandboxes = sbx.sandboxes()
-        except RunnerError as exc:
-            error = exc.code
+    sandboxes, error = sandbox_inventory(sbx, state)
     payload = {
         "sbx_version": f"{version[0]}.{version[1]}.{version[2]}" if version else None,
         "sbx_detail": document,
         "capabilities": caps,
         "daemon_state": state,
-        "sandboxes": [
+        "sandboxes": None if sandboxes is None else [
             {"name": row.get("name"), "status": row.get("status"),
              "agent": row.get("agent")}
             for row in sandboxes
@@ -551,10 +559,13 @@ def command_status(sbx, as_json=False):
     else:
         print(f"sbx          {payload['sbx_version'] or 'not installed'}")
         print(f"daemon       {state}")
-        print(f"sandboxes    {len(payload['sandboxes'])}")
+        count = len(sandboxes) if sandboxes is not None else "unavailable"
+        print(f"sandboxes    {count}")
+        if error:
+            print(f"reason       {error}")
         for note in payload["notes"]:
             print(f"note         {note}")
-        for row in payload["sandboxes"]:
+        for row in payload["sandboxes"] or []:
             print(f"  - {row['name']:<32} {row['status']:<10} {row['agent']}")
     return 0
 

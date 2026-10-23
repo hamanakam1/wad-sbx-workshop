@@ -29,6 +29,21 @@ both list shapes:
 | `sbx diagnose` format | `--output` | `--format` |
 | `sbx ls --json` | `{"sandboxes": [...]}` | a bare array |
 
+## Reading status
+
+`status` reports a sandbox count only after a successful inventory query.
+A successful empty list prints `sandboxes 0`. When discovery is unavailable,
+the text report prints `sandboxes unavailable` and a stable reason code.
+
+In `status --json`, `sandboxes` is a list when known and `null` when
+unavailable. `sandboxes_error` is `null` after a successful query, preserves
+the runner error code after a failed query, or is `sbx_inventory_not_queried`
+when the daemon state is not `running`. The runner does not query or start
+a non-running daemon; `daemon_state` records the reported state. Consumers
+must handle `null` as unknown instead of treating it as an empty list.
+Status remains an informational report with exit code zero when inventory
+is unavailable.
+
 ## The receipt
 
 ```json

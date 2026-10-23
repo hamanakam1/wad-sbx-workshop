@@ -189,6 +189,59 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(len(responses), 1)
 
 
+class StatusToolTests(unittest.TestCase):
+    def _status(self, state, rows=None, error=None):
+        sbx = mock.Mock(spec=runner.Sbx)
+        sbx.version.return_value = (0, 49, 2)
+        sbx.daemon_state.return_value = state
+        sbx.caps.return_value = runner.capabilities((0, 49, 2))
+        sbx.sandboxes.return_value = rows if rows is not None else []
+        sbx.sandboxes.side_effect = error
+        with mock.patch.object(mcp, "_sandbox", return_value=sbx):
+            response = mcp.handle_request(
+                _request("tools/call", name="sbx_status", arguments={}), {})
+        self.assertNotIn("error", response)
+        self.assertFalse(response["result"]["isError"])
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(json.loads(response["result"]["content"][0]["text"]), payload)
+        return sbx, payload
+
+    def test_successful_empty_inventory_reports_zero(self):
+        sbx, payload = self._status("running")
+        sbx.sandboxes.assert_called_once_with()
+        self.assertEqual(payload["sandbox_count"], 0)
+        self.assertIsNone(payload.get("sandboxes_error"))
+
+    def test_successful_inventory_reports_the_exact_count(self):
+        sbx, payload = self._status("running", rows=[{"name": "fixture-1"}, {"name": "fixture-2"}])
+        sbx.sandboxes.assert_called_once_with()
+        self.assertEqual(payload["sandbox_count"], 2)
+        self.assertIsNone(payload.get("sandboxes_error"))
+
+    def test_failed_inventory_reports_null_and_the_original_error_code(self):
+        for code in ("sbx_timeout", "sbx_command_failed"):
+            with self.subTest(code=code):
+                sbx, payload = self._status(
+                    "running", error=runner.RunnerError(code, "synthetic private diagnostic"))
+                sbx.sandboxes.assert_called_once_with()
+                self.assertIsNone(payload["sandbox_count"])
+                self.assertEqual(payload["sandboxes_error"], code)
+                self.assertNotIn("synthetic private diagnostic", str(payload))
+
+    def _assert_inventory_not_queried(self, state):
+        sbx, payload = self._status(state)
+        sbx.sandboxes.assert_not_called()
+        self.assertEqual(payload["daemon_state"], state)
+        self.assertIsNone(payload["sandbox_count"])
+        self.assertEqual(payload["sandboxes_error"], "sbx_inventory_not_queried")
+
+    def test_stopped_daemon_does_not_query_inventory(self):
+        self._assert_inventory_not_queried("stopped")
+
+    def test_unknown_daemon_does_not_query_inventory(self):
+        self._assert_inventory_not_queried("unknown")
+
+
 class RunnerIntegrationTests(unittest.TestCase):
     """The connector must not drift from the runner it depends on."""
 
