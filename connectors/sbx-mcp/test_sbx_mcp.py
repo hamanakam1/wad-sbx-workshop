@@ -15,7 +15,9 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -193,6 +195,24 @@ class RunnerIntegrationTests(unittest.TestCase):
     def test_runner_and_connector_agree_on_the_schema(self):
         self.assertTrue(hasattr(runner, "SCHEMA"))
         self.assertEqual(runner.SCHEMA, "sbx-sandbox-test-receipt-v1")
+
+    def test_run_test_clones_the_requested_workspace(self):
+        sbx = runner.Sbx(binary="/fake/sbx")
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "project with spaces"
+            workspace.mkdir()
+            with mock.patch.dict(os.environ, {"SBX_MCP_ALLOWED_COMMANDS": "npm test"}), \
+                    mock.patch.object(mcp, "_sandbox", return_value=sbx), \
+                    mock.patch.object(sbx, "run", return_value=(0, b"", b"")) as run, \
+                    mock.patch.object(runner, "build_receipt", wraps=runner.build_receipt) as build:
+                result = mcp.tool_sbx_run_test({
+                    "command": ["npm", "test"], "workspace": str(workspace)})
+            create_call = run.call_args_list[0].args[0]
+            self.assertIn("--clone", create_call)
+            self.assertIn(str(workspace.resolve()), create_call)
+            self.assertEqual(build.call_args.kwargs["workspace"], str(workspace))
+            self.assertEqual(run.call_args_list[-1].args[0][0], "rm")
+            self.assertEqual(result["outcome"], "pass")
 
     def test_status_tool_reports_the_runner_capabilities(self):
         class FakeSbx(runner.Sbx):

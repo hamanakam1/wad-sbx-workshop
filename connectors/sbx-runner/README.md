@@ -59,6 +59,11 @@ this code produced the receipt.
 | `direct` | The workspace is bind-mounted read-write. The agent's edits land on your working tree. |
 | `mountless` | No workspace at all. The sandbox shares nothing with the host. |
 
+Both `clone` and `direct` require `--workspace` and pass its resolved absolute
+path to `sbx create`. The selected source therefore matches the workspace in
+the receipt even when the runner or MCP server starts in another directory.
+Paths containing spaces are passed as a single argument.
+
 `clone` is the default because it is the one that cannot surprise you. Its
 limit is worth knowing: a clone-mode sandbox runs against the *committed*
 state, so a test that depends on uncommitted changes sees the committed
@@ -84,3 +89,6 @@ The suite fakes `sbx` at the subprocess boundary, so no sandbox, daemon or
 login is needed. It covers the version parsing, the capability boundaries at
 each release, the list-shape normalisation for both layouts, the argument
 construction for each mode, the output truncation and the receipt's shape.
+It also checks clone selection through the command-line entry point from a
+different directory, including agreement between the create arguments and
+the receipt. The MCP connector's suite covers the same selection boundary.

@@ -373,11 +373,11 @@ class SandboxRun:
     def _create_args(self):
         # `sbx create AGENT [PATH]` — the agent is positional.
         args = ["create", self.agent, "--name", self.name]
-        if self.mode == "clone":
-            args.append("--clone")
-        elif self.mode == "direct":
+        if self.mode in ("clone", "direct"):
             if self.workspace is None:
-                raise RunnerError("missing_workspace", "--mode direct needs a workspace")
+                raise RunnerError("missing_workspace", f"--mode {self.mode} needs a workspace")
+            if self.mode == "clone":
+                args.append("--clone")
             args.append(str(self.workspace))
         # mountless: no path at all, the agent works in its own filesystem.
         args += ["--cpus", str(self.cpus), "--memory", self.memory]

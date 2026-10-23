@@ -18,6 +18,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -131,13 +132,13 @@ class SandboxArgumentTests(unittest.TestCase):
         run = runner.SandboxRun(sbx, "sbxtest-1", **kwargs)
         return run, sbx
 
-    def test_clone_mode_uses_clone_flag_and_no_path(self):
+    def test_clone_mode_passes_the_requested_workspace(self):
         run, sbx = self._run(mode="clone", workspace="/tmp/project")
         args = run._create_args()
         self.assertEqual(args[0], "create")
         self.assertEqual(args[1], "shell")
         self.assertIn("--clone", args)
-        self.assertNotIn("/tmp/project", args)
+        self.assertIn(str(Path("/tmp/project").resolve()), args)
 
     def test_direct_mode_passes_the_workspace_path(self):
         run, sbx = self._run(mode="direct", workspace="/tmp/project")
@@ -161,6 +162,13 @@ class SandboxArgumentTests(unittest.TestCase):
         with self.assertRaises(runner.RunnerError):
             run._create_args()
 
+    def test_clone_mode_without_workspace_never_calls_sbx(self):
+        run, sbx = self._run(mode="clone")
+        with self.assertRaises(runner.RunnerError) as raised:
+            run.create()
+        self.assertEqual(raised.exception.code, "missing_workspace")
+        self.assertEqual(sbx.calls, [])
+
     def test_kits_are_repeatable(self):
         run, sbx = self._run(mode="mountless", kits=["a", "b"])
         args = run._create_args()
@@ -182,6 +190,30 @@ class SandboxArgumentTests(unittest.TestCase):
         self.assertIn("--", argv)
         self.assertEqual(argv[argv.index("--") + 1:], ["npm", "test"])
         self.assertIn("--env", argv)
+
+
+class CommandRunTests(unittest.TestCase):
+    def test_clone_workspace_matches_receipt_when_invoked_elsewhere(self):
+        sbx = FakeSbx()
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "project with spaces"
+            workspace.mkdir()
+            receipt_path = Path(directory) / "receipt.json"
+            self.assertNotEqual(Path.cwd(), workspace.resolve())
+            with mock.patch.object(runner, "Sbx", return_value=sbx), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO):
+                status = runner.main([
+                    "run", "--workspace", str(workspace),
+                    "--receipt", str(receipt_path), "--", "npm", "test"])
+            receipt = json.loads(receipt_path.read_text())
+        self.assertEqual(status, 0)
+        create_call = next(call for call in sbx.calls if call[0] == "create")
+        self.assertIn("--clone", create_call)
+        self.assertIn(str(workspace.resolve()), create_call)
+        self.assertEqual(receipt["source"]["workspace"], str(workspace.resolve()))
+        self.assertEqual(receipt["notes"][0]["argv"], create_call)
+        self.assertEqual(receipt["command"], ["npm", "test"])
+        self.assertEqual(receipt["notes"][-1]["step"], "rm")
 
 
 class ExecTests(unittest.TestCase):

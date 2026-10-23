@@ -367,11 +367,10 @@ The global `--sbx PATH` option points it at a specific binary.
 
 The agent is positional: `sbx create AGENT [PATH]`. The runner assembles:
 
-- **`clone`** → `create <agent> --name <name> --clone` plus sizing, skills
-  and kits. **No path is passed.** The clone is made from the repository
-  containing the current working directory. The `--workspace` argument is
-  checked for existence, recorded in the receipt, and used to compute the
-  source digest and the Git HEAD; it is not passed to `sbx create`.
+- **`clone`** → `create <agent> --name <name> --clone <resolved-workspace-path>`
+  plus sizing, skills and kits. The explicit path selects the repository to
+  clone, independent of the runner's current working directory. It is also
+  recorded in the receipt and used to compute the source digest and Git HEAD.
 - **`direct`** → `create <agent> --name <name> <resolved-workspace-path>`
   plus the same extras. The path is resolved to an absolute path first.
 - **`mountless`** → `create <agent> --name <name>` plus the same extras. No
